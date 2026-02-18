@@ -23,3 +23,12 @@ def chunk_text(text , size=1200 , overlap=200):
         start = end - overlap
 
     return chunks
+def build_index(chunks):
+
+    vectors = []
+
+    for ch in chunks:
+        vec = get_embedding(ch)
+        vectors.append(vec)
+
+    return np.array(vectors)
