@@ -20,120 +20,141 @@ compressor = ScaleDownCompressor(
 
 def get_pdf_text(file):
     doc = fitz.open(file.name)
-    text=""
+    text = ""
     for page in doc:
-        text+=page.get_text()
+        text += page.get_text()
     return text
 
 
 def split_sections(text):
-    pattern=r"(Introduction|Chapter\s+\d+|Conclusion|References)"
-    parts=re.split(pattern,text)
+    pattern = r"(Introduction|Chapter\s+\d+|Conclusion|References|ABSTRACT|Abstract)"
+    parts = re.split(pattern, text)
 
-    sections={}
-    current="Start"
+    sections = {}
+    current = "Start"
 
     for part in parts:
-        if re.match(pattern,part):
-            current=part.strip()
-            sections[current]=""
+        if re.match(pattern, part):
+            current = part.strip()
+            sections[current] = ""
         else:
-            sections[current]=sections.get(current,"")+part.strip()
+            sections[current] = sections.get(current, "") + part.strip()
 
     return sections
 
 
 def full_summary(text):
 
-    prompt="""
-You are summarizing a research paper.
+    sections = split_sections(text)
 
-Provide output in this format:
+    prompt = """
+You are summarizing an academic research paper.
 
-Document Overview:
-- What is this paper about?
+Strictly structure output as:
 
-Key Contributions:
-- What new idea or contribution is presented?
+TITLE:
+ABSTRACT SUMMARY:
+PROBLEM STATEMENT:
+PROPOSED SYSTEM:
+MODELS USED:
+MODEL PERFORMANCE:
+KEY CONTRIBUTIONS:
+LIMITATIONS:
+CONCLUSION:
 
-Methodology:
-- How was it done?
-
-Main Results:
-- What are the key findings?
-
-Limitations:
-- Any limitations mentioned or implied.
+Use bullet points where appropriate.
+Avoid long continuous paragraphs.
+Keep sections clearly separated.
 """
 
-    result=compressor.compress(
-        context=text,
-        prompt=prompt
-    )
+    combined = ""
 
-    return result.content
+    for title, content in sections.items():
+
+        if len(content) < 600:
+            continue
+
+        result = compressor.compress(
+            context=content,
+            prompt=prompt
+        )
+
+        formatted = result.content.replace("\n\n\n", "\n\n").strip()
+
+        combined += "\n\n===== " + title + " =====\n\n"
+        combined += formatted
+        combined += "\n\n----------------------------------------\n"
+
+    if combined.strip() == "":
+        return "Document too small or sections not detected."
+
+    return combined
 
 
-def answer_question(sections,question):
+def answer_question(text, question):
 
-    structured_prompt=f"""
-You are answering a question using ONLY the provided academic content.
+    sections = split_sections(text)
+
+    structured_prompt = f"""
+You are analyzing an academic research paper.
 
 Question:
 {question}
 
-Provide output in this format:
+Strictly follow this output structure:
 
 Direct Answer:
-- Clear answer
+- Clear and precise answer
 
 Technical Explanation:
 - Grounded strictly in document context
 
 Key Evidence:
-- Bullet points from the paper
+- Bullet points extracted from the text
+
+Avoid long continuous paragraphs.
 """
 
-    final_output=""
+    final_output = ""
 
-    for title,content in sections.items():
+    for title, content in sections.items():
 
-        if len(content)<600:
+        if len(content) < 600:
             continue
 
         if any(word.lower() in content.lower() for word in question.split()):
 
-            result=compressor.compress(
+            result = compressor.compress(
                 context=content,
                 prompt=structured_prompt
             )
 
-            final_output+=f"\n\n===== {title} =====\n\n"
-            final_output+=result.content
-            final_output+="\n\n------------------------------\n"
+            formatted = result.content.replace("\n\n\n", "\n\n").strip()
 
-    if final_output.strip()=="":
+            final_output += "\n\n===== " + title + " =====\n\n"
+            final_output += formatted
+            final_output += "\n\n----------------------------------------\n"
+
+    if final_output.strip() == "":
         return "No relevant sections found."
 
     return final_output
 
 
-def run(file,question):
+def run(file, question):
 
     if file is None:
         return "Upload a PDF file."
 
-    text=get_pdf_text(file)
+    text = get_pdf_text(file)
 
-    if question.strip()=="":
+    if question.strip() == "":
         return full_summary(text)
 
-    sections=split_sections(text)
-
-    return answer_question(sections,question)
+    return answer_question(text, question)
 
 
-css="""
+css = """
 body {background-color:#111;color:#e0e0e0;font-family:Century Gothic, sans-serif;}
 .gradio-container {max-width:1100px;margin:auto;}
 textarea {background:#1a1a1a !important;color:#e0e0e0 !important;}
@@ -147,25 +168,25 @@ with gr.Blocks(css=css) as ui:
     gr.Markdown("## Academic Paper Summarizer")
 
     with gr.Row():
-        file_input=gr.File(label="Upload PDF")
-        question_input=gr.Textbox(
+        file_input = gr.File(label="Upload PDF")
+        question_input = gr.Textbox(
             label="Ask Question (optional)",
             placeholder="Leave empty to generate full structured summary"
         )
 
-    output_box=gr.Textbox(
+    output_box = gr.Textbox(
         label="Output",
         lines=30
     )
 
-    submit=gr.Button("Run")
+    submit = gr.Button("Run")
 
     submit.click(
         fn=run,
-        inputs=[file_input,question_input],
+        inputs=[file_input, question_input],
         outputs=output_box
     )
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     ui.launch()
