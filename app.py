@@ -7,186 +7,254 @@ from scaledown.compressor.scaledown_compressor import ScaleDownCompressor
 
 
 load_dotenv()
-api_key = os.getenv("SCALEDOWN_API_KEY")
 
-if not api_key:
-    raise ValueError("API key not found in .env")
+sd_key=os.getenv("SCALEDOWN_API_KEY")
 
-compressor = ScaleDownCompressor(
+if not sd_key:
+    raise ValueError("Missing SCALEDOWN_API_KEY")
+
+
+compressor=ScaleDownCompressor(
     target_model="gpt-4o",
-    api_key=api_key
+    api_key=sd_key
 )
 
 
-def get_pdf_text(file):
-    doc = fitz.open(file.name)
-    text = ""
-    for page in doc:
-        text += page.get_text()
+
+def read_pdf(file):
+
+    doc=fitz.open(file.name)
+    text=""
+
+    for p in doc:
+        text+=p.get_text()
+
     return text
 
 
-def split_sections(text):
-    pattern = r"(Introduction|Chapter\s+\d+|Conclusion|References|ABSTRACT|Abstract)"
-    parts = re.split(pattern, text)
 
-    sections = {}
-    current = "Start"
+def chunk_text(text , size=2000 , overlap=300):
 
-    for part in parts:
-        if re.match(pattern, part):
-            current = part.strip()
-            sections[current] = ""
-        else:
-            sections[current] = sections.get(current, "") + part.strip()
+    chunks=[]
+    start=0
 
-    return sections
+    while start < len(text):
+        end=start+size
+        chunks.append(text[start:end])
+        start=end-overlap
+
+    return chunks
 
 
-def full_summary(text):
 
-    sections = split_sections(text)
+# ---------------- PHASE 1 ----------------
+# Micro Summaries Per Chunk
 
-    prompt = """
-You are summarizing an academic research paper.
+def micro_summarize(chunk):
 
-Strictly structure output as:
+    prompt="""
+Summarize this academic content concisely.
+Focus only on technical content.
+No storytelling.
+Max 8 lines.
+"""
+
+    result=compressor.compress(
+        context=chunk,
+        prompt=prompt
+    )
+
+    return result.content.strip()
+
+
+
+# ---------------- PHASE 2 ----------------
+# Structured Extraction From Combined Micro Summary
+
+def extract_structure(text):
+
+    prompt="""
+You are extracting structured academic information.
+
+Return strictly in this format:
 
 TITLE:
-ABSTRACT SUMMARY:
-PROBLEM STATEMENT:
-PROPOSED SYSTEM:
-MODELS USED:
-MODEL PERFORMANCE:
-KEY CONTRIBUTIONS:
+- inferred title
+
+PROBLEM:
+- core research problem
+
+MODELS:
+- list models used
+
+PERFORMANCE:
+- accuracy, precision, recall, F1 if available
+
+CONTRIBUTIONS:
+- key contributions
+
 LIMITATIONS:
-CONCLUSION:
-
-Use bullet points where appropriate.
-Avoid long continuous paragraphs.
-Keep sections clearly separated.
+- stated or implied weaknesses
 """
 
-    combined = ""
+    result=compressor.compress(
+        context=text,
+        prompt=prompt
+    )
 
-    for title, content in sections.items():
-
-        if len(content) < 600:
-            continue
-
-        result = compressor.compress(
-            context=content,
-            prompt=prompt
-        )
-
-        formatted = result.content.replace("\n\n\n", "\n\n").strip()
-
-        combined += "\n\n===== " + title + " =====\n\n"
-        combined += formatted
-        combined += "\n\n----------------------------------------\n"
-
-    if combined.strip() == "":
-        return "Document too small or sections not detected."
-
-    return combined
+    return result.content.strip()
 
 
-def answer_question(text, question):
 
-    sections = split_sections(text)
+# ---------------- PHASE 3 ----------------
+# Final Executive Brief Synthesis
 
-    structured_prompt = f"""
-You are analyzing an academic research paper.
+def synthesize_final(structured_text):
 
-Question:
-{question}
+    prompt="""
+Generate a clean executive academic brief.
 
-Strictly follow this output structure:
+Rules:
+- Use bullet formatting.
+- No paragraph longer than 3 lines.
+- Keep it concise.
+- Professional tone.
 
-Direct Answer:
-- Clear and precise answer
+Sections required:
 
-Technical Explanation:
-- Grounded strictly in document context
-
-Key Evidence:
-- Bullet points extracted from the text
-
-Avoid long continuous paragraphs.
+TITLE
+PROBLEM
+PROPOSED APPROACH
+MODELS USED
+PERFORMANCE METRICS
+KEY CONTRIBUTIONS
+LIMITATIONS
+CONCLUSION
 """
 
-    final_output = ""
+    result=compressor.compress(
+        context=structured_text,
+        prompt=prompt
+    )
 
-    for title, content in sections.items():
+    return result.content.strip()
 
-        if len(content) < 600:
-            continue
 
-        if any(word.lower() in content.lower() for word in question.split()):
 
-            result = compressor.compress(
-                context=content,
-                prompt=structured_prompt
-            )
+def executive_pipeline(text):
 
-            formatted = result.content.replace("\n\n\n", "\n\n").strip()
+    chunks=chunk_text(text)
 
-            final_output += "\n\n===== " + title + " =====\n\n"
-            final_output += formatted
-            final_output += "\n\n----------------------------------------\n"
+    micro_summaries=[]
 
-    if final_output.strip() == "":
-        return "No relevant sections found."
+    for ch in chunks:
+        micro=micro_summarize(ch)
+        micro_summaries.append(micro)
+
+    combined="\n\n".join(micro_summaries)
+
+    structured=extract_structure(combined)
+
+    final_output=synthesize_final(structured)
 
     return final_output
 
 
-def run(file, question):
+
+# ---------------- QUESTION MODE ----------------
+
+def answer_question(text , question):
+
+    chunks=chunk_text(text)
+
+    scored=[]
+
+    for ch in chunks:
+        score=sum(1 for w in question.lower().split() if w in ch.lower())
+        scored.append((score , ch))
+
+    scored.sort(reverse=True , key=lambda x:x[0])
+
+    top=[c for _,c in scored[:4]]
+
+    context="\n\n".join(top)
+
+    prompt=f"""
+Answer strictly from academic context.
+
+Question:
+{question}
+
+Format:
+
+DIRECT ANSWER:
+- precise response
+
+TECHNICAL DETAILS:
+- explanation
+
+EVIDENCE:
+- supporting facts
+"""
+
+    result=compressor.compress(
+        context=context,
+        prompt=prompt
+    )
+
+    return result.content.strip()
+
+
+
+def run(file , question):
 
     if file is None:
-        return "Upload a PDF file."
+        return "Upload PDF file."
 
-    text = get_pdf_text(file)
+    text=read_pdf(file)
 
-    if question.strip() == "":
-        return full_summary(text)
+    if question.strip()=="":
+        return executive_pipeline(text)
 
-    return answer_question(text, question)
+    return answer_question(text , question)
 
 
-css = """
-body {background-color:#111;color:#e0e0e0;font-family:Century Gothic, sans-serif;}
-.gradio-container {max-width:1100px;margin:auto;}
-textarea {background:#1a1a1a !important;color:#e0e0e0 !important;}
-button {background:#2c2c2c !important;color:#fff !important;border:1px solid #444;}
-button:hover {background:#3a3a3a !important;}
+
+css="""
+body {font-family:Century Gothic, sans-serif;background:#0e1117;color:#e6edf3;}
+.gradio-container {max-width:1100px !important;margin:auto;}
+textarea {background:#161b22 !important;color:#e6edf3 !important;border:1px solid #30363d !important;}
+button {background:#2563eb !important;border:none;}
+button:hover {background:#1d4ed8 !important;}
+footer {display:none !important;}
 """
 
 
 with gr.Blocks(css=css) as ui:
 
-    gr.Markdown("## Academic Paper Summarizer")
+    gr.Markdown("## Academic Executive Brief Generator (Phase-Based Pipeline)")
 
-    with gr.Row():
-        file_input = gr.File(label="Upload PDF")
-        question_input = gr.Textbox(
-            label="Ask Question (optional)",
-            placeholder="Leave empty to generate full structured summary"
-        )
+    file_input=gr.File(label="Upload Research Paper (PDF)")
 
-    output_box = gr.Textbox(
+    question_input=gr.Textbox(
+        label="Optional Question",
+        placeholder="Leave empty for executive brief",
+        lines=2
+    )
+
+    run_btn=gr.Button("Generate")
+
+    output=gr.Textbox(
         label="Output",
-        lines=30
+        lines=32
     )
 
-    submit = gr.Button("Run")
-
-    submit.click(
+    run_btn.click(
         fn=run,
-        inputs=[file_input, question_input],
-        outputs=output_box
+        inputs=[file_input , question_input],
+        outputs=output
     )
 
 
-if __name__ == "__main__":
+if __name__=="__main__":
     ui.launch()

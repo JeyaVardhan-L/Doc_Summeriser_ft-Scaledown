@@ -78,27 +78,55 @@ def retrieve(question , chunks , k=4):
 
 
 
-def summarize_full(text):
+def clean_output(text):
+
+    text=text.strip()
+
+    text=re.sub(r'\n{3,}', '\n\n', text)
+
+    text=text.replace("•","-")
+
+    return text
+
+
+
+def executive_summary(text):
 
     prompt="""
-You are summarizing a research paper.
+You are generating an EXECUTIVE ACADEMIC BRIEF.
 
-Provide structured output:
+Strict Rules:
+- Maximum 1 page equivalent.
+- No storytelling tone.
+- Bullet points where possible.
+- No long continuous paragraphs.
 
-Title:
-- Paper title if available
+Output format exactly as below:
 
-Overview:
-- 6-8 sentence summary
+TITLE:
+- Paper title
 
-Methodology:
-- Core technical methods
+PROBLEM:
+- Core problem addressed
 
-Results:
-- Important metrics and comparisons
+PROPOSED SYSTEM:
+- Architecture summary in 4-6 bullets
 
-Conclusion:
-- Final impact and contribution
+MODELS USED:
+- List models and purpose
+
+PERFORMANCE METRICS:
+- Extract accuracy, precision, recall, F1 if present
+- Format clearly per model
+
+KEY CONTRIBUTIONS:
+- 4-6 bullets
+
+LIMITATIONS:
+- Short bullet list
+
+CONCLUSION:
+- 3-5 concise sentences
 """
 
     result=compressor.compress(
@@ -106,7 +134,7 @@ Conclusion:
         prompt=prompt
     )
 
-    return result.content
+    return clean_output(result.content)
 
 
 
@@ -119,21 +147,26 @@ def answer_question(text , question):
     context="\n\n".join(top_chunks)
 
     structured_prompt=f"""
-You are answering strictly from provided academic content.
+You are answering strictly from academic context.
+
+Rules:
+- Direct and technical.
+- No narrative tone.
+- Bullet format preferred.
 
 Question:
 {question}
 
-Output format:
+Output:
 
-Direct Answer:
+DIRECT ANSWER:
 - Clear response
 
-Technical Explanation:
-- Detailed reasoning based on document
+TECHNICAL DETAILS:
+- Supporting explanation
 
-Supporting Evidence:
-- Bullet points grounded in context
+EVIDENCE:
+- Extracted supporting facts
 """
 
     result=compressor.compress(
@@ -141,7 +174,7 @@ Supporting Evidence:
         prompt=structured_prompt
     )
 
-    return result.content
+    return clean_output(result.content)
 
 
 
@@ -153,7 +186,7 @@ def run(file , question):
     text=read_pdf(file)
 
     if question.strip()=="":
-        return summarize_full(text)
+        return executive_summary(text)
 
     return answer_question(text , question)
 
@@ -163,25 +196,25 @@ css="""
 body {font-family:Century Gothic, sans-serif;background-color:#0e1117;color:#e6edf3;}
 .gradio-container {max-width:1100px !important;margin:auto;}
 textarea {background:#161b22 !important;color:#e6edf3 !important;border:1px solid #30363d !important;}
-button {background:#2f81f7 !important;border:none;}
-button:hover {background:#2563eb !important;transition:0.2s;}
+button {background:#2563eb !important;border:none;}
+button:hover {background:#1d4ed8 !important;transition:0.2s;}
 footer {display:none !important;}
 """
 
 
 with gr.Blocks(css=css) as ui:
 
-    gr.Markdown("## Academic Paper Summarizer (Compression-RAG)")
+    gr.Markdown("## Academic Paper Executive Brief Generator")
 
-    file_input=gr.File(label="Upload PDF")
+    file_input=gr.File(label="Upload Research Paper (PDF)")
 
     question_input=gr.Textbox(
         label="Optional Question",
-        placeholder="Leave empty for full structured summary",
+        placeholder="Leave empty to generate executive brief",
         lines=2
     )
 
-    run_btn=gr.Button("Run")
+    run_btn=gr.Button("Generate")
 
     output=gr.Textbox(
         label="Output",
