@@ -5,11 +5,12 @@ import gradio as gr
 from dotenv import load_dotenv
 from scaledown.compressor.scaledown_compressor import ScaleDownCompressor
 
+
 load_dotenv()
-api_key=os.getenv("SCALEDOWN_API_KEY")
+api_key = os.getenv("SCALEDOWN_API_KEY")
 
 if not api_key:
-    raise ValueError("API key not found")
+    raise ValueError("API key not found in .env")
 
 compressor = ScaleDownCompressor(
     target_model="gpt-4o",
@@ -17,168 +18,151 @@ compressor = ScaleDownCompressor(
 )
 
 
-def read_pdf(file):
+def get_pdf_text(file):
     doc = fitz.open(file.name)
     text=""
-
-    for p in doc:
-        text+=p.get_text()
-
+    for page in doc:
+        text+=page.get_text()
     return text
 
 
-def split_sec(text):
-    pat=r"(Introduction|Chapter\s+\d+|Conclusion|References)"
-    parts=re.split(pat , text)
+def split_sections(text):
+    pattern=r"(Introduction|Chapter\s+\d+|Conclusion|References)"
+    parts=re.split(pattern,text)
 
-    data={}
-    cur="Start"
+    sections={}
+    current="Start"
 
     for part in parts:
-        if re.match(pat , part):
-            cur=part.strip()
-            data[cur]=""
+        if re.match(pattern,part):
+            current=part.strip()
+            sections[current]=""
         else:
-            data[cur]=data.get(cur,"")+part.strip()
+            sections[current]=sections.get(current,"")+part.strip()
 
-    return data
-
-
-def filter_sec(data , q):
-    out={}
-    words=q.split()
-
-    for k , v in data.items():
-        if any(w.lower() in v.lower() for w in words):
-            out[k]=v
-
-    return out
+    return sections
 
 
-def run(file , q):
+def full_summary(text):
 
-    if file is None or q.strip()=="":
-        return "Upload a PDF and enter a question."
+    prompt="""
+You are summarizing a research paper.
 
-    full=read_pdf(file)
-    sections=split_sec(full)
-    rel=filter_sec(sections , q)
+Provide output in this format:
 
-    if not rel:
-        return "No relevant sections found."
+Document Overview:
+- What is this paper about?
 
-    prompt=f"""
-You are answering a question based on an academic paper.
+Key Contributions:
+- What new idea or contribution is presented?
+
+Methodology:
+- How was it done?
+
+Main Results:
+- What are the key findings?
+
+Limitations:
+- Any limitations mentioned or implied.
+"""
+
+    result=compressor.compress(
+        context=text,
+        prompt=prompt
+    )
+
+    return result.content
+
+
+def answer_question(sections,question):
+
+    structured_prompt=f"""
+You are answering a question using ONLY the provided academic content.
 
 Question:
-{q}
+{question}
 
 Provide output in this format:
 
 Direct Answer:
-- Clear answer.
+- Clear answer
 
 Technical Explanation:
-- Explanation grounded in document.
+- Grounded strictly in document context
 
 Key Evidence:
-- Bullet points from text.
+- Bullet points from the paper
 """
 
-    out=""
+    final_output=""
 
-    for title , content in rel.items():
+    for title,content in sections.items():
 
-        if len(content)<500:
+        if len(content)<600:
             continue
 
-        res=compressor.compress(
-            context=content,
-            prompt=prompt
-        )
+        if any(word.lower() in content.lower() for word in question.split()):
 
-        out+="\n\n"+title+"\n\n"
-        out+=res.content
-        out+="\n\n-------------------------------------\n"
+            result=compressor.compress(
+                context=content,
+                prompt=structured_prompt
+            )
 
-    return out
+            final_output+=f"\n\n===== {title} =====\n\n"
+            final_output+=result.content
+            final_output+="\n\n------------------------------\n"
+
+    if final_output.strip()=="":
+        return "No relevant sections found."
+
+    return final_output
 
 
-custom_css="""
-body {
-    font-family: "Century Gothic", "Gothic A1", sans-serif;
-    background-color: #0f1117;
-    color: #e6e6e6;
-}
+def run(file,question):
 
-.gradio-container {
-    max-width: 1200px !important;
-}
+    if file is None:
+        return "Upload a PDF file."
 
-button {
-    background-color: #1f2937 !important;
-    color: #ffffff !important;
-    border: 1px solid #374151 !important;
-    transition: all 0.2s ease-in-out !important;
-}
+    text=get_pdf_text(file)
 
-button:hover {
-    background-color: #2563eb !important;
-    border-color: #2563eb !important;
-}
+    if question.strip()=="":
+        return full_summary(text)
 
-textarea {
-    background-color: #111827 !important;
-    color: #f3f4f6 !important;
-    border: 1px solid #374151 !important;
-    font-family: "Century Gothic", "Gothic A1", sans-serif;
-    overflow-y: auto !important;
-}
+    sections=split_sections(text)
 
-input[type="text"] {
-    background-color: #111827 !important;
-    color: #f3f4f6 !important;
-    border: 1px solid #374151 !important;
-}
+    return answer_question(sections,question)
 
-h1, h2, h3 {
-    font-weight: 500;
-}
 
-hr {
-    border: 0;
-    height: 1px;
-    background: #2d3748;
-}
+css="""
+body {background-color:#111;color:#e0e0e0;font-family:Century Gothic, sans-serif;}
+.gradio-container {max-width:1100px;margin:auto;}
+textarea {background:#1a1a1a !important;color:#e0e0e0 !important;}
+button {background:#2c2c2c !important;color:#fff !important;border:1px solid #444;}
+button:hover {background:#3a3a3a !important;}
 """
 
 
-with gr.Blocks(css=custom_css) as ui:
+with gr.Blocks(css=css) as ui:
 
-    gr.Markdown("# Academic Paper Q&A")
-    gr.Markdown("Upload a research paper and ask structured questions.")
+    gr.Markdown("## Academic Paper Summarizer")
 
     with gr.Row():
+        file_input=gr.File(label="Upload PDF")
+        question_input=gr.Textbox(
+            label="Ask Question (optional)",
+            placeholder="Leave empty to generate full structured summary"
+        )
 
-        with gr.Column(scale=1):
-            file_input=gr.File(label="PDF File", file_types=[".pdf"])
-            question_input=gr.Textbox(
-                label="Question",
-                placeholder="Enter question related to the document",
-                lines=3
-            )
-            run_btn=gr.Button("Analyze")
+    output_box=gr.Textbox(
+        label="Output",
+        lines=30
+    )
 
-        with gr.Column(scale=2):
-            output_box=gr.Textbox(
-                label="Answer",
-                lines=28,
-                
-            )
+    submit=gr.Button("Run")
 
-    run_btn.click(
+    submit.click(
         fn=run,
-        inputs=[file_input , question_input],
+        inputs=[file_input,question_input],
         outputs=output_box
     )
 
