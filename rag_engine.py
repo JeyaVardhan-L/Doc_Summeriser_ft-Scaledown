@@ -32,3 +32,14 @@ def build_index(chunks):
         vectors.append(vec)
 
     return np.array(vectors)
+def retrieve(query , chunks , vectors , k=4):
+
+    q_vec = get_embedding(query)
+
+    scores = vectors @ q_vec / (
+        np.linalg.norm(vectors , axis=1) * np.linalg.norm(q_vec)
+    )
+
+    top_idx = np.argsort(scores)[-k:][::-1]
+
+    return [chunks[i] for i in top_idx]
